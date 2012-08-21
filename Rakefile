@@ -12,6 +12,7 @@ task :new, :app_name, :sdk_version do |t, args|
 
   config = Rally::AppSdk::AppConfig.new(args.app_name, args.sdk_version)
   Rally::AppSdk::AppTemplateBuilder.new(config).build
+  Rally::Jasmine.init_jasmine
 end
 
 desc "Build a deployable app which includes all JavaScript and CSS resources inline"
@@ -50,6 +51,12 @@ task :jslint do |t|
   end
 end
 
+#TODO: this task should be a dependency of the jasmine task
+desc "Builds the files that jasmine needs to run all the specs."
+task 'jasmine:prep' do |t|
+  Rally::AppSdk::AppTemplateBuilder.new(get_config_from_file).build_app_html(true, "spec/UiSpecRunner.html", Rally::AppTemplates::UI_SPEC_RUNNER_TPL)
+end
+
 module Rally
   module AppSdk
 
@@ -85,7 +92,7 @@ module Rally
         create_file_from_template CSS_FILE, Rally::AppTemplates::CSS_TPL
       end
 
-      def build_app_html(debug = false, file = nil)
+      def build_app_html(debug = false, file = nil, template = nil)
         @config.validate
 
         assure_deploy_directory_exists()
@@ -93,7 +100,10 @@ module Rally
         if file.nil?
           file = debug ? HTML_DEBUG : HTML
         end
-        template = debug ? Rally::AppTemplates::HTML_DEBUG_TPL : Rally::AppTemplates::HTML_TPL
+
+        if template.nil?
+          template = debug ? Rally::AppTemplates::HTML_DEBUG_TPL : Rally::AppTemplates::HTML_TPL
+        end
         template = populate_template_with_resources(template,
                                                     "JAVASCRIPT_BLOCK",
                                                     @config.javascript,
@@ -301,6 +311,41 @@ module Rally
     end
   end
 
+  class Jasmine
+    def self.check_for_jasmine_support
+      jasmine_installed = false
+      until jasmine_installed
+        begin
+          require 'rubygems'
+          gem 'jasmine'
+          require 'jasmine'
+          jasmine_installed = true
+        rescue Exception
+          puts "Installing Jasmine..."
+          `gem install jasmine -v '1.2.1'`
+          Gem.clear_paths
+        end
+      end
+
+      true
+    end
+
+    def self.cleanup_jasmine_defaults
+      require 'fileutils'
+      FileUtils.remove_dir('public', true)
+      FileUtils.rm Dir.glob('spec/**/*.js'), :force => true
+    end
+
+    def self.init_jasmine
+      return unless check_for_jasmine_support
+      puts "Initializing Jasmine..."
+
+      `jasmine init`
+
+      cleanup_jasmine_defaults
+    end
+  end
+
   ## Pure (very simple) Ruby JSON implementation
   module RallyJson
     class << self
@@ -440,6 +485,30 @@ STYLE_BLOCK    </style>
      /* Add app styles here */
 }
     END
+
+    UI_SPEC_RUNNER_TPL = <<-END
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Jasmine Spec Runner</title>
+
+    <script type="text/javascript" src="APP_SDK_PATH"></script>
+
+    <script type="text/javascript">
+        Rally.onReady(function() {
+            Rally.loadScripts([
+                JAVASCRIPT_BLOCK
+            ], null, true);
+        });
+    </script>
+
+    STYLE_BLOCK
+
+    <script type="text/javascript">eval(sessionStorage.jasmineui);</script>
+</head>
+<body></body>
+</html>
+    END
   end
 end
 
@@ -461,4 +530,13 @@ end
 
 def sanitize_string(value)
   value.gsub(/[^a-zA-Z0-9 \-_\.']/, "")
+end
+
+begin
+  require 'jasmine'
+  load 'jasmine/tasks/jasmine.rake'
+rescue LoadError
+  task :jasmine do
+    abort "Jasmine is not available. In order to run jasmine, you must: (sudo) gem install jasmine"
+  end
 end
